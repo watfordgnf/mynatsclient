@@ -19,7 +19,6 @@ namespace MyNatsClient
 
         private const int ConsumerPingAfterMsSilenceFromServer = 20000;
         private const int ConsumerMaxMsSilenceFromServer = 40000;
-        private const int MaxReconnectDueToFailureAttempts = 5;
         private const int WaitForConsumerCompleteMs = 100;
 
         private readonly ConnectionInfo _connectionInfo;
@@ -77,8 +76,29 @@ namespace MyNatsClient
 
         private async Task ReconnectAsync()
         {
-            for (var attempts = 0; !IsConnected && attempts < MaxReconnectDueToFailureAttempts; attempts++)
+            bool ShouldReconnect(int attempts)
             {
+                // Do not reconnect if already connected or disposed.
+                if (IsConnected || _isDisposed)
+                    return false;
+
+                // Negative values indicate we should reconnect forever.
+                if (_connectionInfo.MaximumReconnectAttempts < 0)
+                    return true;
+                
+                return attempts < _connectionInfo.MaximumReconnectAttempts;
+            }
+
+            for (var attempts = 0; ShouldReconnect(attempts); attempts++)
+            {
+                var delay = _connectionInfo?.ReconnectDelay(attempts);
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay.Value).ConfigureAwait(false);
+                }
+
+                _eventMediator.Emit(new ClientReconnecting(this, attempts));
+
                 try
                 {
                     await ConnectAsync().ConfigureAwait(false);

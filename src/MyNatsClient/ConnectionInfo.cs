@@ -59,6 +59,24 @@ namespace MyNatsClient
         public int RequestTimeoutMs { get; set; } = 5000;
 
         /// <summary>
+        /// Gets or sets the maximum allowed reconnect attempts.
+        /// </summary>
+        /// <remarks>
+        /// Use a negative value to indicate that the client should reconnect forever.
+        /// </remarks>
+        public int MaximumReconnectAttempts { get; set; } = 5;
+
+        /// <summary>
+        /// Gets or sets a function to compute the delay between reconnection attempts,
+        /// if any.
+        /// </summary>
+        /// <remarks>
+        /// If the function is null, or if the function returns zero, or if the function
+        /// returns a negative value, then there will be no delay between reconnection attempts.
+        /// </remarks>
+        public Func<int, TimeSpan> ReconnectDelay { get; set; } = NoDelay;
+
+        /// <summary>
         /// Gets or sets certificate collection used when authenticating the client against the server
         /// when the server is configured to use TLS and to verify the clients.
         /// If the server is onyl configured to use TLS but not configured to verfify the
@@ -108,6 +126,8 @@ namespace MyNatsClient
                 UseInboxRequests = UseInboxRequests,
                 AutoRespondToPing = AutoRespondToPing,
                 AutoReconnectOnFailure = AutoReconnectOnFailure,
+                MaximumReconnectAttempts = MaximumReconnectAttempts,
+                ReconnectDelay = ReconnectDelay,
                 Credentials = new Credentials(Credentials.User, Credentials.Pass),
                 Verbose = Verbose,
                 RequestTimeoutMs = RequestTimeoutMs,
@@ -126,5 +146,12 @@ namespace MyNatsClient
                 }
             };
         }
+
+        /// <summary>
+        /// Indicates that there should be no delay between reconnection attempts.
+        /// </summary>
+        /// <param name="attempts">The number of reconnection attempts made already.</param>
+        /// <returns>The amount of time to wait before attempting reconnection.</returns>
+        private static TimeSpan NoDelay(int attempts) => TimeSpan.Zero;
     }
 }
