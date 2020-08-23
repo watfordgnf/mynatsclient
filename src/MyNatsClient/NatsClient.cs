@@ -44,7 +44,7 @@ namespace MyNatsClient
         public INatsObservable<IClientEvent> Events => _eventMediator;
         public INatsObservable<IOp> OpStream => _opMediator.AllOpsStream;
         public INatsObservable<MsgOp> MsgOpStream => _opMediator.MsgOpsStream;
-        public bool IsConnected => _connection != null && _connection.IsConnected && _connection.CanRead;
+        public bool IsConnected => _connection.IsConnected && _connection.CanRead;
 
         public NatsClient(ConnectionInfo connectionInfo, ISocketFactory socketFactory = null)
         {
@@ -56,6 +56,7 @@ namespace MyNatsClient
             _inboxAddress = $"IB.{Id}";
             _sync = new SemaphoreSlim(1, 1);
             _connectionInfo = connectionInfo.Clone();
+            _connection = DisconnectedConnection.Instance;
             _subscriptions = new ConcurrentDictionary<string, Subscription>(StringComparer.OrdinalIgnoreCase);
             _eventMediator = new NatsObservableOf<IClientEvent>();
             _opMediator = new NatsOpMediator();
@@ -173,6 +174,7 @@ namespace MyNatsClient
                 _consumer = Task.Factory
                     .StartNew(
                         Worker,
+                        Tuple.Create(_connection, _cancellation.Token),
                         _cancellation.Token,
                         TaskCreationOptions.LongRunning,
                         TaskScheduler.Default)
@@ -200,17 +202,24 @@ namespace MyNatsClient
             }
         }
 
-        private void Worker()
+        private void Worker(object rawState)
         {
-            bool ShouldDoWork() => !_isDisposed && IsConnected && _cancellation?.IsCancellationRequested == false;
+            var state = (Tuple<INatsConnection, CancellationToken>)rawState;
 
+            INatsConnection connection = state.Item1;
+            CancellationToken token = state.Item2;
+
+            bool ShouldDoWork() => !_isDisposed
+                                && connection.IsConnected 
+                                && connection.CanRead 
+                                && !token.IsCancellationRequested;
+
+            var lastOpReceivedAt = DateTime.UtcNow;
             while (ShouldDoWork())
             {
-                var lastOpReceivedAt = DateTime.UtcNow;
-
                 try
                 {
-                    foreach (var op in _connection.ReadOp())
+                    foreach (var op in connection.ReadOp())
                     {
                         if (!ShouldDoWork())
                             break;
@@ -228,9 +237,6 @@ namespace MyNatsClient
                 }
                 catch (Exception ex)
                 {
-                    if (!ShouldDoWork())
-                        break;
-
                     _logger.Error("Worker got Exception.", ex);
 
                     if (ex.InnerException is SocketException socketEx)
@@ -243,6 +249,9 @@ namespace MyNatsClient
                         if (socketEx.SocketErrorCode != SocketError.TimedOut)
                             throw;
                     }
+
+                    if (!ShouldDoWork())
+                        break;
 
                     var silenceDeltaMs = DateTime.UtcNow.Subtract(lastOpReceivedAt).TotalMilliseconds;
                     if (silenceDeltaMs >= ConsumerMaxMsSilenceFromServer)
@@ -304,8 +313,8 @@ namespace MyNatsClient
             },
             () =>
             {
-                _connection?.Dispose();
-                _connection = null;
+                _connection.Dispose();
+                _connection = DisconnectedConnection.Instance;
             });
 
         public void Flush()
